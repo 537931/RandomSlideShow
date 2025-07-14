@@ -2,8 +2,10 @@ package slideshow;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.GridBagLayout;
 import java.awt.Image;
+import java.awt.Point;
 import java.awt.event.ComponentEvent;
 import java.awt.event.ComponentListener;
 import java.awt.event.KeyEvent;
@@ -13,7 +15,6 @@ import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
@@ -35,6 +36,7 @@ public class SlideShow extends JFrame {
 	private Random rand = new Random();
 	private JLabel imageArea;
 	private Image currentImage;
+	private Cursor savedCursor;
 	private boolean paused;
 
 	public SlideShow() {
@@ -53,6 +55,7 @@ public class SlideShow extends JFrame {
 			@Override
 			public void keyReleased( KeyEvent e ) {
 				if( e.getKeyCode() == KeyEvent.VK_ESCAPE ) {
+					getContentPane().setCursor( savedCursor );
 					System.exit( 0 );
 			    }
 				else if( e.getKeyCode() == KeyEvent.VK_SPACE ) {
@@ -94,10 +97,15 @@ public class SlideShow extends JFrame {
 
 		getContentPane().add( imageArea, BorderLayout.CENTER );
 		setSize( 500, 400 );
+		savedCursor = getContentPane().getCursor();
+		getContentPane().setCursor( getContentPane().getToolkit().createCustomCursor(
+                new BufferedImage( 1, 1, BufferedImage.TYPE_INT_ARGB ),
+                new Point(), null ));
 		setDefaultCloseOperation( WindowConstants.EXIT_ON_CLOSE );
 
 		addWindowListener( new WindowAdapter() {
 			public void windowClosing( WindowEvent e ) {
+				getContentPane().setCursor( savedCursor );
 				System.exit( 0 );
 			}
 		});
