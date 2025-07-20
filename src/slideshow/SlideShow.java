@@ -21,6 +21,10 @@ import java.util.Arrays;
 import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.logging.FileHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
 
 import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
@@ -31,16 +35,23 @@ import javax.swing.SwingWorker;
 import javax.swing.WindowConstants;
 import javax.swing.border.TitledBorder;
 
+//import com.sun.jna.platform.win32.User32;
+
 public class SlideShow extends JFrame {
 	private static final long serialVersionUID = 1L;
+	
+	private static enum RND { LIST, WALK };
 
 	private BlockingQueue<Slide> imgQueue = new ArrayBlockingQueue<Slide>( 3 ); 
 	private Random rand = new Random();
+	private Logger logger = Logger.getLogger( SlideShow.class.getName());
+	private ArrayList<String>filesList = new ArrayList<String>();
 	private JLabel imageArea;
 	private Slide currentSlide;
 	private Cursor savedCursor;
-	private long exposure = 7000;
+	private long exposure = 7;
 	private boolean paused;
+	private RND randomiser = RND.LIST;
 
 	/*
 	 * This class is introduced to couple image with its path.
@@ -51,10 +62,29 @@ public class SlideShow extends JFrame {
 		String path;
 	};
 
-	public SlideShow() {
+	public SlideShow( String[] args ) {
 		super( "Random slide show" );
+
+		/* make a file logger */
+		try {
+			FileHandler fh = new FileHandler(
+					System.getProperty( "user.home" ) + "\\slideshow.log", 50000, 1, false );
+			fh.setFormatter( new SimpleFormatter());
+			logger.addHandler( fh );
+		}
+		catch( SecurityException | IOException e ) {
+			e.printStackTrace();
+		}
+
+		/* check what arguments are passed by the system */
+		if( null != args )
+			for( int i = 0; i < args.length; i++ )
+				logger.log( Level.INFO, args[ i ] );
+
+		/* take whole screen */
 		setUndecorated( true );
 		setExtendedState( JFrame.MAXIMIZED_BOTH );
+
 		addKeyListener( new KeyListener() {
 			@Override
 			public void keyTyped( KeyEvent e ) {
@@ -111,9 +141,7 @@ public class SlideShow extends JFrame {
 
 		getContentPane().add( imageArea, BorderLayout.CENTER );
 
-		/*
-		 * Hide the cursor
-		 */
+		/* hide the cursor */
 		savedCursor = getContentPane().getCursor();
 		getContentPane().setCursor( getContentPane().getToolkit().createCustomCursor(
                 new BufferedImage( 1, 1, BufferedImage.TYPE_INT_ARGB ),
@@ -128,48 +156,60 @@ public class SlideShow extends JFrame {
 	}
 
 	/**
-	 * The method starts the show. It launches two workers.
-	 * One fetches random images walking down the path and
-	 * puts them to a small queue. The other worker takes
-	 * the images from the queue and displays them on the
-	 * screen.
+	 * The method starts the show.
 	 *
 	 * @param path images location in the file system.
 	 */
 	public void start( File path ) {
+		/* walk the file system and make a list of all files down */
+		if( randomiser == RND.LIST ) {
+			new SwingWorker<Void, Void>() {
+				@Override
+				protected Void doInBackground() throws Exception {
+					fillFileList( path, filesList );
+					return null;
+				}
+			}.execute();
+
+			/*
+			 * let the worker to add some files to the list
+			 */
+			delay( 5000 );
+		}
+
+		/*
+		 * This worker gets random images and puts them
+		 * to the queue for displaying.
+		 */
 		new SwingWorker<Void, Void>() {
 			@Override
 			protected Void doInBackground() throws Exception {
+				Slide s;
+
 				for( ;; ) {
-					try {
-						if( ! paused ) {
-							Slide s = fetchRandomFile( path );
+					if( randomiser == RND.LIST )
+						s = fetchRandomFile( filesList );
+					else
+						s = fetchRandomFile( path );
 
-							if( s != null )
-								imgQueue.put( s );
-						}
-
-						Thread.sleep( exposure );
-					}
-					catch( InterruptedException ignore ) {
-					}
+					if( s != null )
+						imgQueue.put( s );
 				}
 			}
 		}.execute();
-
+		 
+		/*
+		 * This worker takes the images from the queue
+		 * and displays them on the screen.
+		 */
 		new SwingWorker<Void, Void>() {
 			@Override
 			protected Void doInBackground() throws Exception {
 				for( ;; ) {
-					try {
-						if( ! paused ) {
-							updateView( imgQueue.take());
-						}
+					if( ! paused )
+						updateView( imgQueue.take());
 
-						Thread.sleep( exposure );
-					}
-					catch( InterruptedException ignore ) {
-					}
+					delay( exposure * 1000 );
 				}
 			}
 		}.execute();
@@ -210,6 +250,7 @@ public class SlideShow extends JFrame {
 		 * can be printed when the view is paused.
 		 */
 		currentSlide = s;
+		logger.log( Level.INFO, s.path );
 	}
 
 	/**
@@ -253,10 +294,10 @@ public class SlideShow extends JFrame {
 				if( null == bi )
 					throw new IOException( f.getCanonicalPath() + " is not an image" );
 
-				System.out.println( f.getCanonicalPath());
 				Slide s = new Slide();
 				s.image = bi;
 				s.path = f.getCanonicalPath();
+				logger.log( Level.INFO, s.path );
 
 				return s;
 			}
@@ -268,8 +309,90 @@ public class SlideShow extends JFrame {
 		return null;
 	}
 
+	/**
+	 * The method gets a random file from the list of files.
+	 * If a file cannot be loaded as image it is deleted from the list.
+	 * 
+	 * @param list the list of all available images
+	 * 
+	 * @return a new slide with an image or null if it hits a dead end without finding an image file.
+	 */
+	private Slide fetchRandomFile( ArrayList<String>list ) {
+		for( ;; ) {
+			int i = rand.nextInt( list.size());
+			File f = new File( list.get( i ));
+
+			try {
+				/*
+				 * Load image from the file, make a new slide and return it.
+				 */
+				BufferedImage bi = ImageIO.read( f );
+
+				if( null != bi ) {
+					Slide s = new Slide();
+					s.image = bi;
+					s.path = f.getCanonicalPath();
+					logger.log( Level.INFO, s.path );
+
+					return s;
+				}
+				else {
+					list.remove( i );
+				}
+			}
+			catch( IOException e ) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	/**
+	 * The method goes down the provided path and makes
+	 * a list of all found files.
+	 *
+	 * @param path search starting point
+	 * @param list the files list
+	 */
+	private void fillFileList( File path, ArrayList<String>list ) {
+		try {
+			/*
+			 * If the path is a link find the original path
+			 */
+			if( path.isFile() && path.getName().toLowerCase().endsWith( ".lnk" )) {
+				LnkParser lp = new LnkParser( path );
+
+				if( lp.isDirectory()) {
+					path = new File( lp.getRealFilename());
+					fillFileList( path, list );
+				}
+			}
+
+			if( path.isDirectory()) {
+				File[] children = path.listFiles();
+
+				for( File f : children ) {
+					if( f.isDirectory() || f.getName().toLowerCase().endsWith( ".lnk" ))
+						fillFileList( f, list );
+					else
+						list.add( f.getAbsolutePath());
+				}
+			}
+		}
+		catch( IOException e ) {
+			System.out.println( e.getMessage());
+		}
+	}
+
+	private void delay( long ms ) {
+		try {
+		Thread.sleep( ms );
+		}
+		catch( InterruptedException ignore ) {
+		}
+	}
+
 	public static void main( String[] args ) {
-		SlideShow ss = new SlideShow();
+		SlideShow ss = new SlideShow( args );
 		ss.start( new File( "F:\\Screen Saver" ));
 		ss.setVisible( true );
 	}
