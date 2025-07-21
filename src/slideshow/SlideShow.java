@@ -15,9 +15,12 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -40,17 +43,29 @@ import javax.swing.border.TitledBorder;
 public class SlideShow extends JFrame {
 	private static final long serialVersionUID = 1L;
 	
+
+	/* configuration parameters */
+	private static String CFG_SHOW_FOLDER = "showFolder";
+	private static String CFG_EXPOSURE_TIME = "exposureTime";
+	private static String CFG_ENABLE_LOG = "enableLog";
+
+	/* randomizing approach */
 	private static enum RND { LIST, WALK };
 
 	private BlockingQueue<Slide> imgQueue = new ArrayBlockingQueue<Slide>( 3 ); 
 	private Random rand = new Random();
 	private Logger logger = Logger.getLogger( SlideShow.class.getName());
+	private String showFolder = System.getProperty( "user.home" ) + "\\Pictures";
+	private String cfgFile = System.getProperty( "user.home" ) + "\\.slideshow\\cfg.txt";
+	private String logFile = System.getProperty( "user.home" ) + "\\.slideshow\\log.txt";
 	private ArrayList<String>filesList = new ArrayList<String>();
 	private JLabel imageArea;
 	private Slide currentSlide;
 	private Cursor savedCursor;
 	private long exposure = 7;
+	private boolean enableLog = true;
 	private boolean paused;
+	private Properties prop = new Properties();
 	private RND randomiser = RND.LIST;
 
 	/*
@@ -65,21 +80,36 @@ public class SlideShow extends JFrame {
 	public SlideShow( String[] args ) {
 		super( "Random slide show" );
 
-		/* make a file logger */
-		try {
-			FileHandler fh = new FileHandler(
-					System.getProperty( "user.home" ) + "\\slideshow.log", 50000, 1, false );
-			fh.setFormatter( new SimpleFormatter());
-			logger.addHandler( fh );
+		/* load configuration */
+		try( FileInputStream fis = new FileInputStream( cfgFile )) {
+		    prop.load( fis );
+			showFolder = prop.getProperty( CFG_SHOW_FOLDER );
+			exposure = Long.decode( prop.getProperty( CFG_EXPOSURE_TIME ));
+			enableLog = Boolean.parseBoolean( prop.getProperty( CFG_ENABLE_LOG ));
 		}
-		catch( SecurityException | IOException e ) {
-			e.printStackTrace();
+		catch( FileNotFoundException ex ) {
+			System.out.println( "Configuration file has not been found" );
+		}
+		catch( IOException ex ) {
+			System.out.println( "Error reading configuration file" );
+		}
+
+		if( enableLog ) {
+			/* make a file logger */
+			try {
+				FileHandler fh = new FileHandler( logFile, 50000, 1, false );
+				fh.setFormatter( new SimpleFormatter());
+				logger.addHandler( fh );
+			}
+			catch( SecurityException | IOException e ) {
+				e.printStackTrace();
+			}
 		}
 
 		/* check what arguments are passed by the system */
-		if( null != args )
-			for( int i = 0; i < args.length; i++ )
-				logger.log( Level.INFO, args[ i ] );
+//		if( null != args )
+//			for( int i = 0; i < args.length; i++ )
+//				logger.log( Level.INFO, args[ i ] );
 
 		/* take whole screen */
 		setUndecorated( true );
@@ -160,13 +190,13 @@ public class SlideShow extends JFrame {
 	 *
 	 * @param path images location in the file system.
 	 */
-	public void start( File path ) {
+	public void start() {
 		/* walk the file system and make a list of all files down */
 		if( randomiser == RND.LIST ) {
 			new SwingWorker<Void, Void>() {
 				@Override
 				protected Void doInBackground() throws Exception {
-					fillFileList( path, filesList );
+					fillFileList( new File( showFolder ), filesList );
 					return null;
 				}
 			}.execute();
@@ -190,7 +220,7 @@ public class SlideShow extends JFrame {
 					if( randomiser == RND.LIST )
 						s = fetchRandomFile( filesList );
 					else
-						s = fetchRandomFile( path );
+						s = fetchRandomFile( new File( showFolder ));
 
 					if( s != null )
 						imgQueue.put( s );
@@ -250,12 +280,16 @@ public class SlideShow extends JFrame {
 		 * can be printed when the view is paused.
 		 */
 		currentSlide = s;
-		logger.log( Level.INFO, s.path );
+
+		if( enableLog )
+			logger.log( Level.INFO, s.path );
 	}
 
 	/**
 	 * The method does a random walking down the file system from the point
-	 * provided as path argument. 
+	 * provided as path argument. It only works well if there is a large
+	 * number of folders on the top level. Otherwise there is a good chance
+	 * of repeating the same path.
 	 * 
 	 * @param path starting point for the search
 	 * 
@@ -297,7 +331,9 @@ public class SlideShow extends JFrame {
 				Slide s = new Slide();
 				s.image = bi;
 				s.path = f.getCanonicalPath();
-				logger.log( Level.INFO, s.path );
+
+				if( enableLog )
+					logger.log( Level.INFO, s.path );
 
 				return s;
 			}
@@ -332,7 +368,9 @@ public class SlideShow extends JFrame {
 					Slide s = new Slide();
 					s.image = bi;
 					s.path = f.getCanonicalPath();
-					logger.log( Level.INFO, s.path );
+
+					if( enableLog )
+						logger.log( Level.INFO, s.path );
 
 					return s;
 				}
@@ -383,17 +421,32 @@ public class SlideShow extends JFrame {
 		}
 	}
 
+	/**
+	 * The method delays execution for certain time
+	 *
+	 * @param ms number of milliseconds to delay
+	 */
 	private void delay( long ms ) {
 		try {
-		Thread.sleep( ms );
+			Thread.sleep( ms );
 		}
-		catch( InterruptedException ignore ) {
-		}
+		catch( InterruptedException ignore ) {}
 	}
 
+	/**
+	 * Application starting point
+	 *
+	 * @param args
+	 * 
+	 * /s - start in display mode
+	 * /p <window handle> - Screen Saver selector panel is opened
+	 * /c - open configuration panel
+	 */
 	public static void main( String[] args ) {
-		SlideShow ss = new SlideShow( args );
-		ss.start( new File( "F:\\Screen Saver" ));
-		ss.setVisible( true );
+		if( "/s".equalsIgnoreCase( args[ 0 ] )) {
+			SlideShow ss = new SlideShow( args );
+			ss.start();
+			ss.setVisible( true );
+		}
 	}
 }
